@@ -40,6 +40,8 @@ export default function DrawerLayout() {
           }}>
           <Stack.Screen name="index" options={{ title: 'Home' }} />
           <Stack.Screen name="home" options={{ title: 'Home' }} />
+          <Stack.Screen name="ride-confirmation" options={{ title: 'Confirm Ride' }} />
+          <Stack.Screen name="in-ride" options={{ title: 'Your Ride' }} />
           <Stack.Screen name="profile" options={{ title: 'Profile' }} />
           <Stack.Screen name="payment-methods" options={{ title: 'Payment Methods' }} />
           <Stack.Screen name="history" options={{ title: 'History' }} />
