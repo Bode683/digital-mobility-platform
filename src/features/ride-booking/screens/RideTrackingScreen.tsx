@@ -1,55 +1,315 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BaseMap, MapMarker, RouteVisualization } from "../../map";
 import { RideTracker } from "../components/RideTracker";
 import { useRideBooking } from "../contexts/RideBookingContext";
+import type { Ride } from "../types";
 
 export default function RideTrackingScreen() {
   const theme = useTheme();
   const navigation = useNavigation();
-  const { state: rideState } = useRideBooking();
+  const { state: rideState, dispatch } = useRideBooking();
 
   const [driverLocation, setDriverLocation] = useState<{
     latitude: number;
     longitude: number;
   } | null>(null);
+  const rideStatusRef = useRef<string | null>(null);
+  const arrivalAtPickupRef = useRef(false);
+  const arrivalAtDestinationRef = useRef(false);
+  const inProgressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastDriverLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
 
-  // Simulate driver location updates
+  // Helper function to calculate distance between two points in kilometers
+  const calculateDistance = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Helper function to calculate bearing between two points
+  const calculateBearing = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ): number => {
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const lat1Rad = (lat1 * Math.PI) / 180;
+    const lat2Rad = (lat2 * Math.PI) / 180;
+    const y = Math.sin(dLon) * Math.cos(lat2Rad);
+    const x =
+      Math.cos(lat1Rad) * Math.sin(lat2Rad) -
+      Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+    return Math.atan2(y, x);
+  };
+
+  // Helper function to move point toward target at constant speed
+  const moveTowardTarget = (
+    currentLat: number,
+    currentLon: number,
+    targetLat: number,
+    targetLon: number,
+    speedKmh: number,
+    intervalSeconds: number
+  ): { latitude: number; longitude: number; distance: number } => {
+    const distance = calculateDistance(currentLat, currentLon, targetLat, targetLon);
+    
+    // If already very close (within 50 meters), snap to exact location
+    if (distance < 0.05) {
+      return {
+        latitude: targetLat,
+        longitude: targetLon,
+        distance: 0,
+      };
+    }
+
+    // Calculate distance to move (speed in km/h * interval in hours)
+    const distanceToMove = (speedKmh * intervalSeconds) / 3600; // Convert to km
+    
+    // If we would overshoot, just move to target
+    if (distanceToMove >= distance) {
+      return {
+        latitude: targetLat,
+        longitude: targetLon,
+        distance: 0,
+      };
+    }
+
+    // Calculate bearing
+    const bearing = calculateBearing(currentLat, currentLon, targetLat, targetLon);
+    
+    // Calculate new position (approximately, good for short distances)
+    const lat1Rad = (currentLat * Math.PI) / 180;
+    const lon1Rad = (currentLon * Math.PI) / 180;
+    const angularDistance = distanceToMove / 6371; // Earth's radius in km
+    
+    const newLat = Math.asin(
+      Math.sin(lat1Rad) * Math.cos(angularDistance) +
+        Math.cos(lat1Rad) * Math.sin(angularDistance) * Math.cos(bearing)
+    );
+    const newLon =
+      lon1Rad +
+      Math.atan2(
+        Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(lat1Rad),
+        Math.cos(angularDistance) - Math.sin(lat1Rad) * Math.sin(newLat)
+      );
+    
+    return {
+      latitude: (newLat * 180) / Math.PI,
+      longitude: (newLon * 180) / Math.PI,
+      distance: distance - distanceToMove,
+    };
+  };
+
+  // Initialize driver location when ride starts
   useEffect(() => {
-    if (!rideState.currentRide || !rideState.currentRide.pickup) return;
+    if (!rideState.currentRide || !rideState.currentRide.pickup) {
+      setDriverLocation(null);
+      return;
+    }
 
-    // Start with driver location away from pickup
-    const initialDriverLocation = {
-      latitude: rideState.currentRide.pickup.latitude - 0.01,
-      longitude: rideState.currentRide.pickup.longitude - 0.01,
+    // Only initialize if we don't have a driver location yet
+    if (!driverLocation) {
+      const initialDriverLocation = {
+        latitude: rideState.currentRide.pickup.latitude - 0.01,
+        longitude: rideState.currentRide.pickup.longitude - 0.01,
+      };
+      setDriverLocation(initialDriverLocation);
+    }
+  }, [rideState.currentRide?.id]); // Only reinitialize if ride ID changes
+
+  // Simulate driver location updates with constant speed
+  useEffect(() => {
+    if (!rideState.currentRide || !rideState.currentRide.pickup || !driverLocation) return;
+
+    // Track current ride status
+    rideStatusRef.current = rideState.currentRide.status;
+
+    // Determine target location based on ride status
+    const getTargetLocation = () => {
+      if (rideState.currentRide!.status === "requested" || rideState.currentRide!.status === "accepted" || rideState.currentRide!.status === "arriving") {
+        return rideState.currentRide!.pickup;
+      } else if (rideState.currentRide!.status === "in_progress") {
+        return rideState.currentRide!.destination;
+      }
+      return null;
     };
 
-    setDriverLocation(initialDriverLocation);
+    const targetLocation = getTargetLocation();
+    if (!targetLocation) return;
 
-    // Simulate driver moving toward pickup location
+    // Driver speed: 30 km/h (adjustable)
+    const driverSpeedKmh = 30;
+    const updateIntervalSeconds = 2; // Update every 2 seconds for smoother movement
+
+    // Simulate driver moving toward target location at constant speed
     const interval = setInterval(() => {
       setDriverLocation((prev) => {
-        if (!prev || !rideState.currentRide) return prev;
+        if (!prev || !rideState.currentRide || !targetLocation) return prev;
 
-        const moveTowardPickup = {
-          latitude:
-            prev.latitude +
-            (rideState.currentRide.pickup.latitude - prev.latitude) * 0.1,
-          longitude:
-            prev.longitude +
-            (rideState.currentRide.pickup.longitude - prev.longitude) * 0.1,
+        const currentTarget = getTargetLocation();
+        if (!currentTarget) return prev;
+
+        const result = moveTowardTarget(
+          prev.latitude,
+          prev.longitude,
+          currentTarget.latitude,
+          currentTarget.longitude,
+          driverSpeedKmh,
+          updateIntervalSeconds
+        );
+
+        // Check if driver has arrived at pickup (only if status is accepted or requested)
+        if (
+          (rideState.currentRide.status === "requested" || rideState.currentRide.status === "accepted") &&
+          !arrivalAtPickupRef.current &&
+          calculateDistance(
+            result.latitude,
+            result.longitude,
+            rideState.currentRide.pickup.latitude,
+            rideState.currentRide.pickup.longitude
+          ) < 0.05 // Within 50 meters
+        ) {
+          // Mark arrival at pickup (will be handled in separate effect)
+          arrivalAtPickupRef.current = true;
+          
+          // Snap driver to exact pickup location
+          return {
+            latitude: rideState.currentRide.pickup.latitude,
+            longitude: rideState.currentRide.pickup.longitude,
+          };
+        }
+
+        // Check if driver has arrived at destination
+        if (
+          rideState.currentRide.status === "in_progress" &&
+          !arrivalAtDestinationRef.current &&
+          calculateDistance(
+            result.latitude,
+            result.longitude,
+            rideState.currentRide.destination.latitude,
+            rideState.currentRide.destination.longitude
+          ) < 0.05 // Within 50 meters
+        ) {
+          // Mark arrival at destination (will be handled in separate effect)
+          arrivalAtDestinationRef.current = true;
+          
+          // Snap driver to exact destination location
+          return {
+            latitude: rideState.currentRide.destination.latitude,
+            longitude: rideState.currentRide.destination.longitude,
+          };
+        }
+
+        return {
+          latitude: result.latitude,
+          longitude: result.longitude,
         };
-
-        return moveTowardPickup;
       });
-    }, 3000);
+    }, updateIntervalSeconds * 1000);
 
-    return () => clearInterval(interval);
-  }, [rideState.currentRide]);
+    return () => {
+      clearInterval(interval);
+      if (inProgressTimeoutRef.current) {
+        clearTimeout(inProgressTimeoutRef.current);
+        inProgressTimeoutRef.current = null;
+      }
+    };
+  }, [rideState.currentRide, driverLocation, dispatch]);
+
+  // Handle arrival at pickup - update status outside of setState callback
+  // Watch driverLocation changes to detect arrival
+  useEffect(() => {
+    if (!driverLocation || !rideState.currentRide) return;
+
+    // Check if driver is at pickup location and hasn't been marked as arrived
+    if (
+      !arrivalAtPickupRef.current &&
+      (rideState.currentRide.status === "requested" || rideState.currentRide.status === "accepted") &&
+      calculateDistance(
+        driverLocation.latitude,
+        driverLocation.longitude,
+        rideState.currentRide.pickup.latitude,
+        rideState.currentRide.pickup.longitude
+      ) < 0.05 // Within 50 meters
+    ) {
+      arrivalAtPickupRef.current = true;
+      
+      // Update ride status to "arriving"
+      const updatedRide: Ride = {
+        ...rideState.currentRide,
+        status: "arriving",
+        updatedAt: new Date().toISOString(),
+      };
+      dispatch({ type: "SET_CURRENT_RIDE", payload: updatedRide });
+      rideStatusRef.current = "arriving";
+
+      // After 3 seconds, update to "in_progress" (driver picked up passenger)
+      inProgressTimeoutRef.current = setTimeout(() => {
+        const inProgressRide: Ride = {
+          ...updatedRide,
+          status: "in_progress",
+          updatedAt: new Date().toISOString(),
+        };
+        dispatch({ type: "SET_CURRENT_RIDE", payload: inProgressRide });
+        rideStatusRef.current = "in_progress";
+        inProgressTimeoutRef.current = null;
+      }, 3000);
+    }
+
+    // Check if driver is at destination location and hasn't been marked as arrived
+    if (
+      !arrivalAtDestinationRef.current &&
+      rideState.currentRide.status === "in_progress" &&
+      calculateDistance(
+        driverLocation.latitude,
+        driverLocation.longitude,
+        rideState.currentRide.destination.latitude,
+        rideState.currentRide.destination.longitude
+      ) < 0.05 // Within 50 meters
+    ) {
+      arrivalAtDestinationRef.current = true;
+      
+      // Update ride status to "completed"
+      const completedRide: Ride = {
+        ...rideState.currentRide,
+        status: "completed",
+        updatedAt: new Date().toISOString(),
+      };
+      dispatch({ type: "SET_CURRENT_RIDE", payload: completedRide });
+      rideStatusRef.current = "completed";
+    }
+
+    lastDriverLocationRef.current = driverLocation;
+  }, [driverLocation, rideState.currentRide, dispatch]);
+
+  // Reset arrival flags when ride changes
+  useEffect(() => {
+    arrivalAtPickupRef.current = false;
+    arrivalAtDestinationRef.current = false;
+    if (inProgressTimeoutRef.current) {
+      clearTimeout(inProgressTimeoutRef.current);
+      inProgressTimeoutRef.current = null;
+    }
+  }, [rideState.currentRide?.id]);
 
   // Handle ride cancellation
   const handleRideCancelled = () => {
