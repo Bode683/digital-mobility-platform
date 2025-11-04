@@ -7,6 +7,8 @@ export { RideCancellationModal } from './components/RideCancellationModal';
 export { RideHistoryItem } from './components/RideHistoryItem';
 export { RideTracker } from './components/RideTracker';
 export { RideTypeSelection } from './components/RideTypeSelection';
+export { RoutePreviewCard } from './components/RoutePreviewCard';
+export type { RoutePreviewCardProps } from './components/RoutePreviewCard';
 
 // Export screens
 export { default as RideConfirmationScreen } from './screens/RideConfirmationScreen';

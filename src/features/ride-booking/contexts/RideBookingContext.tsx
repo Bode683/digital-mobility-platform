@@ -5,6 +5,7 @@ import React, {
   useEffect,
   useReducer,
   useCallback,
+  useRef,
 } from "react";
 import { MapLocation, useMap } from "../../map";
 import { mockPaymentMethods, mockRideTypes } from "../api/mockData";
@@ -167,20 +168,45 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     }
   }, []);
 
+  // Helper function to compare locations by value
+  const locationsEqual = (loc1: MapLocation | null, loc2: MapLocation | null): boolean => {
+    if (loc1 === loc2) return true;
+    if (!loc1 || !loc2) return false;
+    return (
+      loc1.latitude === loc2.latitude &&
+      loc1.longitude === loc2.longitude
+    );
+  };
+
+  // Track previous values to prevent unnecessary syncs
+  const prevPickupRef = useRef<MapLocation | null>(null);
+  const prevDropoffRef = useRef<MapLocation | null>(null);
+
   // Sync with map context when locations change
   useEffect(() => {
-    if (mapState.pickupLocation !== state.pickupLocation) {
+    // Only sync if locations are actually different by value
+    const pickupChanged = !locationsEqual(mapState.pickupLocation, prevPickupRef.current);
+    const dropoffChanged = !locationsEqual(mapState.dropoffLocation, prevDropoffRef.current);
+
+    // Only update if the location actually changed and is different from our state
+    if (pickupChanged && !locationsEqual(mapState.pickupLocation, state.pickupLocation)) {
+      prevPickupRef.current = mapState.pickupLocation;
       dispatch({
         type: "SET_PICKUP_LOCATION",
         payload: mapState.pickupLocation,
       });
+    } else if (!pickupChanged) {
+      prevPickupRef.current = mapState.pickupLocation;
     }
 
-    if (mapState.dropoffLocation !== state.destinationLocation) {
+    if (dropoffChanged && !locationsEqual(mapState.dropoffLocation, state.destinationLocation)) {
+      prevDropoffRef.current = mapState.dropoffLocation;
       dispatch({
         type: "SET_DESTINATION_LOCATION",
         payload: mapState.dropoffLocation,
       });
+    } else if (!dropoffChanged) {
+      prevDropoffRef.current = mapState.dropoffLocation;
     }
   }, [mapState.pickupLocation, mapState.dropoffLocation, state.pickupLocation, state.destinationLocation]);
 
@@ -231,7 +257,24 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     dispatch({ type: "SET_DESTINATION_LOCATION", payload: location });
   };
 
-  const calculateRoute = async () => {
+  // Helper function to calculate distance between two points
+  const calculateDistance = useCallback((loc1: MapLocation, loc2: MapLocation): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = toRad(loc2.latitude - loc1.latitude);
+    const dLon = toRad(loc2.longitude - loc1.longitude);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(loc1.latitude)) *
+        Math.cos(toRad(loc2.latitude)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }, []);
+
+  const calculateRoute = useCallback(async () => {
     const { pickupLocation, destinationLocation } = state;
 
     if (!pickupLocation || !destinationLocation) {
@@ -288,6 +331,7 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
       });
 
       // Auto-select first ride type if none selected
+      // Use state from closure, but this will work since we're reading from the current state
       if (!state.selectedRideType && state.availableRideTypes.length > 0) {
         dispatch({
           type: "SELECT_RIDE_TYPE",
@@ -300,7 +344,7 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     } finally {
       dispatch({ type: "SET_LOADING_ROUTE", payload: false });
     }
-  };
+  }, [state.pickupLocation, state.destinationLocation, state.selectedRideType, state.availableRideTypes, calculateDistance]);
 
   const selectRideType = (rideType: RideType | null) => {
     dispatch({ type: "SELECT_RIDE_TYPE", payload: rideType });
@@ -408,23 +452,6 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
 
   const resetBooking = () => {
     dispatch({ type: "RESET_BOOKING" });
-  };
-
-  // Helper function to calculate distance between two points
-  const calculateDistance = (loc1: MapLocation, loc2: MapLocation): number => {
-    const R = 6371; // Earth's radius in km
-    const dLat = toRad(loc2.latitude - loc1.latitude);
-    const dLon = toRad(loc2.longitude - loc1.longitude);
-
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(toRad(loc1.latitude)) *
-        Math.cos(toRad(loc2.latitude)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
   };
 
   const toRad = (degrees: number): number => {

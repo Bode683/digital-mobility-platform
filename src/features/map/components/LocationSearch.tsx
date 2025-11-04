@@ -56,19 +56,16 @@ export function LocationSearch({
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const translateY = useRef(new Animated.Value(0)).current;
   
-  // Local state
-  const [activeInput, setActiveInput] = useState<'pickup' | 'dropoff' | null>(
-    autoFocusPickup ? 'pickup' : autoFocusDropoff ? 'dropoff' : null
-  );
-  
   // Use the location search hook
   const {
     pickupQuery,
     dropoffQuery,
     suggestions,
     isSearching,
+    activeInput,
     setPickupQuery,
     setDropoffQuery,
+    setActiveInput,
     handleSuggestionSelect,
   } = useLocationSearch({
     initialPickup,
@@ -85,14 +82,16 @@ export function LocationSearch({
     },
   });
 
-  // Auto-focus logic
+  // Initialize activeInput based on autoFocus props
   useEffect(() => {
     if (autoFocusPickup) {
+      setActiveInput('pickup');
       setTimeout(() => pickupInputRef.current?.focus(), 100);
     } else if (autoFocusDropoff) {
+      setActiveInput('dropoff');
       setTimeout(() => dropoffInputRef.current?.focus(), 100);
     }
-  }, [autoFocusPickup, autoFocusDropoff]);
+  }, [autoFocusPickup, autoFocusDropoff, setActiveInput]);
 
   // Animation for focus/blur
   useEffect(() => {
@@ -129,6 +128,7 @@ export function LocationSearch({
 
   // Handle input focus
   const handleInputFocus = (inputType: 'pickup' | 'dropoff') => {
+    console.log('[LocationSearch] Input focused:', inputType);
     setActiveInput(inputType);
   };
 
@@ -136,6 +136,7 @@ export function LocationSearch({
   const handleInputBlur = () => {
     // Delay to allow suggestion selection
     setTimeout(() => {
+      console.log('[LocationSearch] Input blurred, clearing activeInput');
       setActiveInput(null);
     }, 150);
   };
