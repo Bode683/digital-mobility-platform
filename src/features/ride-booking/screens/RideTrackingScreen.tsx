@@ -23,6 +23,7 @@ export default function RideTrackingScreen() {
   const arrivalAtDestinationRef = useRef(false);
   const inProgressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastDriverLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const completedRideIdRef = useRef<string | null>(null);
 
   // Helper function to calculate distance between two points in kilometers
   const calculateDistance = (
@@ -341,10 +342,36 @@ export default function RideTrackingScreen() {
     lastDriverLocationRef.current = driverLocation;
   }, [driverLocation, rideState.currentRide, dispatch]);
 
+  // Handle ride completion: move to history and navigate
+  useEffect(() => {
+    if (
+      rideState.currentRide?.status === "completed" &&
+      rideState.currentRide.id !== completedRideIdRef.current
+    ) {
+      // Mark this ride as processed to prevent duplicate entries
+      completedRideIdRef.current = rideState.currentRide.id;
+
+      // Add completed ride to history
+      dispatch({ 
+        type: "ADD_TO_RIDE_HISTORY", 
+        payload: rideState.currentRide 
+      });
+      
+      // Clear current ride after a short delay to show completion status
+      const completionTimeout = setTimeout(() => {
+        dispatch({ type: "SET_CURRENT_RIDE", payload: null });
+        // Navigation will happen automatically via the useEffect that watches currentRide
+      }, 2000); // 2 second delay to show "Ride completed" message
+
+      return () => clearTimeout(completionTimeout);
+    }
+  }, [rideState.currentRide?.status, rideState.currentRide, dispatch]);
+
   // Reset arrival flags when ride changes
   useEffect(() => {
     arrivalAtPickupRef.current = false;
     arrivalAtDestinationRef.current = false;
+    completedRideIdRef.current = null; // Reset completed ride tracking when ride changes
     if (inProgressTimeoutRef.current) {
       clearTimeout(inProgressTimeoutRef.current);
       inProgressTimeoutRef.current = null;
@@ -353,12 +380,15 @@ export default function RideTrackingScreen() {
 
   // Handle ride cancellation
   const handleRideCancelled = () => {
-    navigation.navigate("home" as never);
+    // cancelRide in context already handles state cleanup (clears currentRide and adds to history)
+    // Navigation will happen automatically via the useEffect below
   };
 
   // If no active ride, redirect to home
   useEffect(() => {
     if (!rideState.currentRide) {
+      // Only navigate if we're not already on the home screen
+      // This prevents unnecessary navigation loops
       navigation.navigate("home" as never);
     }
   }, [rideState.currentRide, navigation]);
