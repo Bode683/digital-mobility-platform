@@ -165,8 +165,35 @@ export default function RideTrackingScreen() {
       setDriverLocation((prev) => {
         if (!prev || !rideState.currentRide || !targetLocation) return prev;
 
+        // If driver has already arrived at pickup and status is "arriving", keep them at pickup
+        // When status is "in_progress", allow movement toward destination
+        if (
+          arrivalAtPickupRef.current &&
+          rideState.currentRide.status === "arriving"
+        ) {
+          // Keep driver at pickup location while status is "arriving"
+          return {
+            latitude: rideState.currentRide.pickup.latitude,
+            longitude: rideState.currentRide.pickup.longitude,
+          };
+        }
+
         const currentTarget = getTargetLocation();
         if (!currentTarget) return prev;
+
+        // Log when moving toward destination
+        if (rideState.currentRide.status === "in_progress") {
+          const currentDistance = calculateDistance(
+            prev.latitude,
+            prev.longitude,
+            currentTarget.latitude,
+            currentTarget.longitude
+          );
+          // Only log occasionally to avoid spam
+          if (Math.random() < 0.1) { // 10% chance to log
+            console.log('[RideTrackingScreen] Interval: Moving toward destination. Distance remaining:', currentDistance.toFixed(4), 'km');
+          }
+        }
 
         const result = moveTowardTarget(
           prev.latitude,
@@ -178,20 +205,22 @@ export default function RideTrackingScreen() {
         );
 
         // Check if driver has arrived at pickup (only if status is accepted or requested)
+        // Don't set ref here - let the useEffect handle it to avoid race conditions
+        const distanceToPickup = calculateDistance(
+          result.latitude,
+          result.longitude,
+          rideState.currentRide.pickup.latitude,
+          rideState.currentRide.pickup.longitude
+        );
+
         if (
           (rideState.currentRide.status === "requested" || rideState.currentRide.status === "accepted") &&
           !arrivalAtPickupRef.current &&
-          calculateDistance(
-            result.latitude,
-            result.longitude,
-            rideState.currentRide.pickup.latitude,
-            rideState.currentRide.pickup.longitude
-          ) < 0.05 // Within 50 meters
+          distanceToPickup < 0.05 // Within 50 meters
         ) {
-          // Mark arrival at pickup (will be handled in separate effect)
-          arrivalAtPickupRef.current = true;
-          
+          console.log('[RideTrackingScreen] Interval: Driver within pickup range. Distance:', distanceToPickup, 'km, Snapping to pickup location');
           // Snap driver to exact pickup location
+          // The useEffect will detect this and update the status
           return {
             latitude: rideState.currentRide.pickup.latitude,
             longitude: rideState.currentRide.pickup.longitude,
@@ -199,6 +228,7 @@ export default function RideTrackingScreen() {
         }
 
         // Check if driver has arrived at destination
+        // Don't set ref here - let the useEffect handle it to avoid race conditions
         if (
           rideState.currentRide.status === "in_progress" &&
           !arrivalAtDestinationRef.current &&
@@ -209,10 +239,8 @@ export default function RideTrackingScreen() {
             rideState.currentRide.destination.longitude
           ) < 0.05 // Within 50 meters
         ) {
-          // Mark arrival at destination (will be handled in separate effect)
-          arrivalAtDestinationRef.current = true;
-          
           // Snap driver to exact destination location
+          // The useEffect will detect this and update the status
           return {
             latitude: rideState.currentRide.destination.latitude,
             longitude: rideState.currentRide.destination.longitude,
@@ -240,17 +268,20 @@ export default function RideTrackingScreen() {
   useEffect(() => {
     if (!driverLocation || !rideState.currentRide) return;
 
+    const distanceToPickup = calculateDistance(
+      driverLocation.latitude,
+      driverLocation.longitude,
+      rideState.currentRide.pickup.latitude,
+      rideState.currentRide.pickup.longitude
+    );
+
     // Check if driver is at pickup location and hasn't been marked as arrived
     if (
       !arrivalAtPickupRef.current &&
       (rideState.currentRide.status === "requested" || rideState.currentRide.status === "accepted") &&
-      calculateDistance(
-        driverLocation.latitude,
-        driverLocation.longitude,
-        rideState.currentRide.pickup.latitude,
-        rideState.currentRide.pickup.longitude
-      ) < 0.05 // Within 50 meters
+      distanceToPickup < 0.05 // Within 50 meters
     ) {
+      console.log('[RideTrackingScreen] Driver arrived at pickup! Distance:', distanceToPickup, 'km');
       arrivalAtPickupRef.current = true;
       
       // Update ride status to "arriving"
@@ -259,11 +290,13 @@ export default function RideTrackingScreen() {
         status: "arriving",
         updatedAt: new Date().toISOString(),
       };
+      console.log('[RideTrackingScreen] Updating ride status to "arriving"');
       dispatch({ type: "SET_CURRENT_RIDE", payload: updatedRide });
       rideStatusRef.current = "arriving";
 
       // After 3 seconds, update to "in_progress" (driver picked up passenger)
       inProgressTimeoutRef.current = setTimeout(() => {
+        console.log('[RideTrackingScreen] Updating ride status to "in_progress" - driver should start moving toward destination');
         const inProgressRide: Ride = {
           ...updatedRide,
           status: "in_progress",
@@ -272,20 +305,26 @@ export default function RideTrackingScreen() {
         dispatch({ type: "SET_CURRENT_RIDE", payload: inProgressRide });
         rideStatusRef.current = "in_progress";
         inProgressTimeoutRef.current = null;
+        
+        // Verify the driver location is set correctly
+        console.log('[RideTrackingScreen] Driver should now move from pickup to destination');
       }, 3000);
     }
 
     // Check if driver is at destination location and hasn't been marked as arrived
+    const distanceToDestination = calculateDistance(
+      driverLocation.latitude,
+      driverLocation.longitude,
+      rideState.currentRide.destination.latitude,
+      rideState.currentRide.destination.longitude
+    );
+
     if (
       !arrivalAtDestinationRef.current &&
       rideState.currentRide.status === "in_progress" &&
-      calculateDistance(
-        driverLocation.latitude,
-        driverLocation.longitude,
-        rideState.currentRide.destination.latitude,
-        rideState.currentRide.destination.longitude
-      ) < 0.05 // Within 50 meters
+      distanceToDestination < 0.05 // Within 50 meters
     ) {
+      console.log('[RideTrackingScreen] Driver arrived at destination! Distance:', distanceToDestination, 'km');
       arrivalAtDestinationRef.current = true;
       
       // Update ride status to "completed"
@@ -294,6 +333,7 @@ export default function RideTrackingScreen() {
         status: "completed",
         updatedAt: new Date().toISOString(),
       };
+      console.log('[RideTrackingScreen] Updating ride status to "completed"');
       dispatch({ type: "SET_CURRENT_RIDE", payload: completedRide });
       rideStatusRef.current = "completed";
     }

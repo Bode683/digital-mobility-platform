@@ -8,8 +8,11 @@ import React, {
   useRef,
 } from "react";
 import { MapLocation, useMap } from "../../map";
+import { findNearbyDriver } from "../../driver-management/api/mockData";
+import type { Driver as DriverManagementDriver } from "../../driver-management/types";
 import { mockPaymentMethods, mockRideTypes } from "../api/mockData";
 import {
+  Driver,
   PaymentMethod,
   PriceFactors,
   Ride,
@@ -274,6 +277,28 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     return R * c;
   }, []);
 
+  // Helper function to convert driver-management Driver to ride-booking Driver
+  const convertDriverToRideBookingFormat = useCallback(
+    (driver: DriverManagementDriver): Driver => {
+      return {
+        id: driver.id,
+        name: driver.name,
+        rating: driver.rating,
+        photo: driver.photo,
+        phoneNumber: driver.phoneNumber,
+        vehicle: {
+          id: driver.vehicle.id,
+          make: driver.vehicle.make,
+          model: driver.vehicle.model,
+          color: driver.vehicle.color,
+          licensePlate: driver.vehicle.licensePlate,
+          year: driver.vehicle.year,
+        },
+      };
+    },
+    []
+  );
+
   const calculateRoute = useCallback(async () => {
     const { pickupLocation, destinationLocation } = state;
 
@@ -388,15 +413,43 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     try {
       // In a real app, this would call an API to request a ride
       // For now, we'll simulate it with a timeout and mock data
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // Find a nearby driver for the ride
+      // Map ride type to vehicle type (if available)
+      const vehicleTypeMap: Record<string, string | undefined> = {
+        standard: "sedan",
+        premium: "luxury",
+        xl: "xl",
+        eco: "eco",
+      };
+      const vehicleType = vehicleTypeMap[selectedRideType.id];
+
+      const driverManagementDriver = await findNearbyDriver(
+        pickupLocation.latitude,
+        pickupLocation.longitude,
+        vehicleType
+      );
+
+      if (!driverManagementDriver) {
+        dispatch({
+          type: "SET_ERROR",
+          payload: "No drivers available in your area. Please try again later.",
+        });
+        return null;
+      }
+
+      // Convert driver to ride-booking format
+      const driver = convertDriverToRideBookingFormat(driverManagementDriver);
 
       // Mock ride creation
       const now = new Date();
       const estimatedArrival = new Date(now.getTime() + 5 * 60000); // 5 minutes from now
 
+      // Create ride with "accepted" status since driver is assigned
       const ride: Ride = {
         id: `ride-${Date.now()}`,
-        status: "requested",
+        status: "accepted", // Start with "accepted" since driver is already assigned
         pickup: pickupLocation,
         destination: destinationLocation,
         fare: state.priceEstimates[selectedRideType.id] || 0,
@@ -406,6 +459,8 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
         rideType: selectedRideType,
         paymentMethod: selectedPaymentMethod,
         route: state.routeData || undefined,
+        driver: driver,
+        vehicle: driver.vehicle,
       };
 
       dispatch({ type: "SET_CURRENT_RIDE", payload: ride });
