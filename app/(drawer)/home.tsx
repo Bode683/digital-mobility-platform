@@ -29,11 +29,12 @@ export default function HomeScreen() {
     setPickupLocation,
     setDropoffLocation,
   } = useMap();
-  const { state: rideState, calculateRoute } = useRideBooking();
+  const { state: rideState, dispatch, calculateRoute } = useRideBooking();
 
   // Local state
   const [isLocationSearchVisible, setIsLocationSearchVisible] = useState(true);
   const [isMapInitialized, setIsMapInitialized] = useState(false);
+  const lastErrorRef = React.useRef<string | null>(null);
 
   // Check for active ride on mount and redirect if needed
   useEffect(() => {
@@ -92,12 +93,50 @@ export default function HomeScreen() {
     }
   }, [mapState.pickupLocation, mapState.dropoffLocation, calculateRoute]);
 
+  // Display errors to user
+  useEffect(() => {
+    if (rideState.error && rideState.error !== lastErrorRef.current) {
+      lastErrorRef.current = rideState.error;
+      Alert.alert("Error", rideState.error, [
+        {
+          text: "OK",
+          onPress: () => {
+            // Clear error after user acknowledges it
+            lastErrorRef.current = null;
+            dispatch({ type: "SET_ERROR", payload: null });
+          },
+        },
+      ]);
+    } else if (!rideState.error) {
+      // Reset ref when error is cleared
+      lastErrorRef.current = null;
+    }
+  }, [rideState.error, dispatch]);
+
   // Handle route confirmation - navigate to confirmation screen
   const handleConfirmRide = useCallback(() => {
     if (!mapState.pickupLocation || !mapState.dropoffLocation) {
       Alert.alert(
         "Error",
         "Please select both pickup and destination locations"
+      );
+      return;
+    }
+
+    // Validate that route data exists before navigation
+    if (!rideState.routeData) {
+      Alert.alert(
+        "Error",
+        "Route is being calculated. Please wait a moment and try again."
+      );
+      return;
+    }
+
+    // Validate that price estimates are available
+    if (Object.keys(rideState.priceEstimates).length === 0) {
+      Alert.alert(
+        "Error",
+        "Price estimates are being calculated. Please wait a moment and try again."
       );
       return;
     }
@@ -110,7 +149,13 @@ export default function HomeScreen() {
         destination: JSON.stringify(mapState.dropoffLocation),
       },
     } as any);
-  }, [mapState.pickupLocation, mapState.dropoffLocation, router]);
+  }, [
+    mapState.pickupLocation,
+    mapState.dropoffLocation,
+    rideState.routeData,
+    rideState.priceEstimates,
+    router,
+  ]);
 
   // Handle edit route - show location search again
   const handleEditRoute = useCallback(() => {

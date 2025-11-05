@@ -155,6 +155,12 @@ interface RideBookingProviderProps {
 export function RideBookingProvider({ children }: RideBookingProviderProps) {
   const [state, dispatch] = useReducer(rideBookingReducer, initialState);
   const { state: mapState } = useMap();
+  
+  // Use ref to store latest state to avoid stale closures
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Load initial data
   useEffect(() => {
@@ -300,7 +306,8 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
   );
 
   const calculateRoute = useCallback(async () => {
-    const { pickupLocation, destinationLocation } = state;
+    // Read from latest state to avoid stale closure
+    const { pickupLocation, destinationLocation } = stateRef.current;
 
     if (!pickupLocation || !destinationLocation) {
       dispatch({
@@ -356,11 +363,12 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
       });
 
       // Auto-select first ride type if none selected
-      // Use state from closure, but this will work since we're reading from the current state
-      if (!state.selectedRideType && state.availableRideTypes.length > 0) {
+      // Read from latest state to avoid stale closure
+      const currentState = stateRef.current;
+      if (!currentState.selectedRideType && currentState.availableRideTypes.length > 0) {
         dispatch({
           type: "SELECT_RIDE_TYPE",
-          payload: state.availableRideTypes[0],
+          payload: currentState.availableRideTypes[0],
         });
       }
     } catch (error) {
@@ -369,7 +377,7 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     } finally {
       dispatch({ type: "SET_LOADING_ROUTE", payload: false });
     }
-  }, [state.pickupLocation, state.destinationLocation, state.selectedRideType, state.availableRideTypes, calculateDistance]);
+  }, [calculateDistance]);
 
   const selectRideType = (rideType: RideType | null) => {
     dispatch({ type: "SELECT_RIDE_TYPE", payload: rideType });
@@ -380,12 +388,14 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
   };
 
   const requestRide = async (): Promise<Ride | null> => {
+    // Read from latest state to avoid stale closure
+    const currentState = stateRef.current;
     const {
       pickupLocation,
       destinationLocation,
       selectedRideType,
       selectedPaymentMethod,
-    } = state;
+    } = currentState;
 
     if (!pickupLocation || !destinationLocation) {
       dispatch({
@@ -446,19 +456,22 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
       const now = new Date();
       const estimatedArrival = new Date(now.getTime() + 5 * 60000); // 5 minutes from now
 
+      // Read latest state again to get most recent price estimates
+      const latestState = stateRef.current;
+
       // Create ride with "accepted" status since driver is assigned
       const ride: Ride = {
         id: `ride-${Date.now()}`,
         status: "accepted", // Start with "accepted" since driver is already assigned
         pickup: pickupLocation,
         destination: destinationLocation,
-        fare: state.priceEstimates[selectedRideType.id] || 0,
+        fare: latestState.priceEstimates[selectedRideType.id] || 0,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
         estimatedArrival: estimatedArrival.toISOString(),
         rideType: selectedRideType,
         paymentMethod: selectedPaymentMethod,
-        route: state.routeData || undefined,
+        route: latestState.routeData || undefined,
         driver: driver,
         vehicle: driver.vehicle,
       };

@@ -2,6 +2,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -24,9 +25,10 @@ export default function RideConfirmationScreen() {
   }>();
 
   const { state: mapState } = useMap();
-  const { state: rideState, calculateRoute, requestRide } = useRideBooking();
+  const { state: rideState, dispatch, calculateRoute, requestRide } = useRideBooking();
 
   const [isMapExpanded, setIsMapExpanded] = useState(false);
+  const lastErrorRef = React.useRef<string | null>(null);
 
   // Parse coordinates from route params if available
   useEffect(() => {
@@ -40,12 +42,21 @@ export default function RideConfirmationScreen() {
     }
   }, [params]);
 
-  // Calculate route when component mounts
+  // Calculate route only if not already calculated or if locations changed
   useEffect(() => {
     if (mapState.pickupLocation && mapState.dropoffLocation) {
-      calculateRoute();
+      // Only calculate if route doesn't exist or locations have changed
+      const locationsChanged = 
+        rideState.pickupLocation?.latitude !== mapState.pickupLocation.latitude ||
+        rideState.pickupLocation?.longitude !== mapState.pickupLocation.longitude ||
+        rideState.destinationLocation?.latitude !== mapState.dropoffLocation.latitude ||
+        rideState.destinationLocation?.longitude !== mapState.dropoffLocation.longitude;
+      
+      if (!rideState.routeData || locationsChanged) {
+        calculateRoute();
+      }
     }
-  }, [mapState.pickupLocation, mapState.dropoffLocation, calculateRoute]);
+  }, [mapState.pickupLocation, mapState.dropoffLocation, rideState.routeData, rideState.pickupLocation, rideState.destinationLocation, calculateRoute]);
 
   // Handle ride request
   const handleRequestRide = async () => {
@@ -54,11 +65,35 @@ export default function RideConfirmationScreen() {
       if (ride) {
         // Navigate to ride tracking screen
         navigation.navigate("in-ride" as never);
+      } else {
+        // requestRide returned null, error is already set in state
+        // Error will be displayed via useEffect below
       }
     } catch (error) {
       console.error("Error requesting ride:", error);
+      // Error is already set in context state, will be displayed via useEffect
     }
   };
+
+  // Display errors to user
+  useEffect(() => {
+    if (rideState.error && rideState.error !== lastErrorRef.current) {
+      lastErrorRef.current = rideState.error;
+      Alert.alert("Error", rideState.error, [
+        {
+          text: "OK",
+          onPress: () => {
+            // Clear error after user acknowledges it
+            lastErrorRef.current = null;
+            dispatch({ type: "SET_ERROR", payload: null });
+          },
+        },
+      ]);
+    } else if (!rideState.error) {
+      // Reset ref when error is cleared
+      lastErrorRef.current = null;
+    }
+  }, [rideState.error, dispatch]);
 
   // Format distance
   const formatDistance = (distance: number | null) => {
