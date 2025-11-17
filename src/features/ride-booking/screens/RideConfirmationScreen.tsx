@@ -2,7 +2,6 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,6 +10,7 @@ import {
 } from "react-native";
 import { Button, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Toast from "react-native-toast-message";
 import { BaseMap, MapMarker, RouteVisualization, useMap } from "../../map";
 import { PaymentMethodSelection } from "../components/PaymentMethodSelection";
 import { RideTypeSelection } from "../components/RideTypeSelection";
@@ -53,10 +53,24 @@ export default function RideConfirmationScreen() {
         rideState.destinationLocation?.longitude !== mapState.dropoffLocation.longitude;
       
       if (!rideState.routeData || locationsChanged) {
-        calculateRoute();
+        calculateRoute(
+          mapState.pickupLocation,
+          mapState.dropoffLocation,
+          rideState.selectedRideType,
+          rideState.availableRideTypes
+        );
       }
     }
-  }, [mapState.pickupLocation, mapState.dropoffLocation, rideState.routeData, rideState.pickupLocation, rideState.destinationLocation, calculateRoute]);
+  }, [
+    mapState.pickupLocation,
+    mapState.dropoffLocation,
+    rideState.routeData,
+    rideState.pickupLocation,
+    rideState.destinationLocation,
+    rideState.selectedRideType,
+    rideState.availableRideTypes,
+    calculateRoute
+  ]);
 
   // Handle ride request
   const handleRequestRide = async () => {
@@ -75,20 +89,23 @@ export default function RideConfirmationScreen() {
     }
   };
 
-  // Display errors to user
+  // Display errors to user with Toast
   useEffect(() => {
     if (rideState.error && rideState.error !== lastErrorRef.current) {
       lastErrorRef.current = rideState.error;
-      Alert.alert("Error", rideState.error, [
-        {
-          text: "OK",
-          onPress: () => {
-            // Clear error after user acknowledges it
-            lastErrorRef.current = null;
-            dispatch({ type: "SET_ERROR", payload: null });
-          },
+      
+      Toast.show({
+        type: 'error',
+        text1: 'Error',
+        text2: rideState.error,
+        position: 'top',
+        visibilityTime: 4000,
+        onHide: () => {
+          // Clear error after toast is dismissed
+          lastErrorRef.current = null;
+          dispatch({ type: "SET_ERROR", payload: null });
         },
-      ]);
+      });
     } else if (!rideState.error) {
       // Reset ref when error is cleared
       lastErrorRef.current = null;

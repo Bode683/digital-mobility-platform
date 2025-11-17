@@ -10,9 +10,10 @@ import {
 import { RoutePreviewCard, useRideBooking } from "@/features/ride-booking";
 import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Toast from "react-native-toast-message";
 
 /**
  * Home Screen
@@ -89,24 +90,38 @@ export default function HomeScreen() {
   // Calculate route when both locations are set
   useEffect(() => {
     if (mapState.pickupLocation && mapState.dropoffLocation) {
-      calculateRoute();
+      calculateRoute(
+        mapState.pickupLocation,
+        mapState.dropoffLocation,
+        rideState.selectedRideType,
+        rideState.availableRideTypes
+      );
     }
-  }, [mapState.pickupLocation, mapState.dropoffLocation, calculateRoute]);
+  }, [
+    mapState.pickupLocation,
+    mapState.dropoffLocation,
+    rideState.selectedRideType,
+    rideState.availableRideTypes,
+    calculateRoute
+  ]);
 
-  // Display errors to user
+  // Display errors to user with Toast
   useEffect(() => {
     if (rideState.error && rideState.error !== lastErrorRef.current) {
       lastErrorRef.current = rideState.error;
-      Alert.alert("Error", rideState.error, [
-        {
-          text: "OK",
-          onPress: () => {
-            // Clear error after user acknowledges it
-            lastErrorRef.current = null;
-            dispatch({ type: "SET_ERROR", payload: null });
-          },
+      
+      Toast.show({
+        type: 'error',
+        text1: 'Error',
+        text2: rideState.error,
+        position: 'top',
+        visibilityTime: 4000,
+        onHide: () => {
+          // Clear error after toast is dismissed
+          lastErrorRef.current = null;
+          dispatch({ type: "SET_ERROR", payload: null });
         },
-      ]);
+      });
     } else if (!rideState.error) {
       // Reset ref when error is cleared
       lastErrorRef.current = null;
