@@ -1,11 +1,11 @@
 import { MapLocation } from '../../map';
 import {
-    CancellationReason,
-    PaymentMethod,
-    Ride,
-    RideRequest,
-    RideType,
-    RouteData
+  CancellationReason,
+  PaymentMethod,
+  Ride,
+  RideRequest,
+  RideType,
+  RouteData
 } from '../types';
 import { mockPaymentMethods, mockRideTypes } from './mockData';
 
@@ -29,7 +29,7 @@ export async function fetchRideTypes(
 }
 
 /**
- * Fetches route information between two points
+ * Fetches route information between two points using Mapbox Directions API
  * 
  * @param pickup Pickup location
  * @param destination Destination location
@@ -39,38 +39,106 @@ export async function fetchRoute(
   pickup: MapLocation,
   destination: MapLocation
 ): Promise<RouteData> {
-  // In a real app, this would call a routing API like Mapbox Directions
-  // For now, we'll simulate it with a timeout and mock data
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  // Check for Mapbox token
+  const accessToken = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
+  if (!accessToken) {
+    throw new Error('Mapbox token not configured. Please set EXPO_PUBLIC_MAPBOX_TOKEN in your environment.');
+  }
+
+  // Format coordinates as longitude,latitude;longitude,latitude
+  const coordinates = `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}`;
   
-  // Calculate straight-line distance for demo
-  const distance = calculateDistance(pickup, destination);
-  const duration = distance * 2 * 60; // Rough estimate: 30 km/h average speed
+  // Use driving-traffic profile for real-time traffic-aware routing
+  const profile = 'driving-traffic';
+  const url = `https://api.mapbox.com/directions/v5/mapbox/${profile}/${coordinates}?geometries=geojson&steps=true&access_token=${accessToken}`;
   
-  // Mock route data
-  return {
-    geometry: {
-      type: 'LineString',
-      coordinates: [
-        [pickup.longitude, pickup.latitude],
-        [destination.longitude, destination.latitude]
-      ]
-    },
-    distance: distance * 1000, // Convert to meters
-    duration: duration, // In seconds
-    steps: [
-      {
-        instruction: 'Start at pickup location',
-        distance: 0,
-        duration: 0
-      },
-      {
+  try {
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to fetch route from Mapbox: ${response.status} ${response.statusText}. ${errorText}`);
+    }
+    
+    const data = await response.json();
+    
+    // Check if routes are available
+    if (!data.routes || data.routes.length === 0) {
+      throw new Error('No routes found between the specified locations.');
+    }
+    
+    // Get the first route (best route)
+    const route = data.routes[0];
+    
+    // Transform steps from Mapbox format to RouteData format
+    const steps: RouteData['steps'] = [];
+    
+    if (route.legs && route.legs.length > 0) {
+      // Combine all steps from all legs
+      route.legs.forEach((leg: any) => {
+        if (leg.steps && leg.steps.length > 0) {
+          leg.steps.forEach((step: any) => {
+            // Extract instruction from maneuver
+            let instruction = 'Continue';
+            if (step.maneuver) {
+              if (step.maneuver.instruction) {
+                instruction = step.maneuver.instruction;
+              } else {
+                // Generate instruction from maneuver type and modifier if instruction is not available
+                const type = step.maneuver.type || '';
+                const modifier = step.maneuver.modifier || '';
+                
+                if (type === 'depart') {
+                  instruction = 'Start at pickup location';
+                } else if (type === 'arrive') {
+                  instruction = 'Arrive at destination';
+                } else if (type === 'turn') {
+                  instruction = `Turn ${modifier}`;
+                } else if (type === 'merge') {
+                  instruction = `Merge ${modifier}`;
+                } else if (type === 'ramp') {
+                  instruction = `Take ramp ${modifier}`;
+                } else if (type === 'continue') {
+                  instruction = 'Continue straight';
+                } else {
+                  instruction = `${type} ${modifier}`.trim();
+                }
+              }
+            }
+            
+            steps.push({
+              instruction,
+              distance: step.distance || 0, // Already in meters
+              duration: step.duration || 0, // Already in seconds
+            });
+          });
+        }
+      });
+    }
+    
+    // If no steps were extracted, create a simple step
+    if (steps.length === 0) {
+      steps.push({
         instruction: 'Drive to destination',
-        distance: distance * 1000,
-        duration: duration
-      }
-    ]
-  };
+        distance: route.distance || 0,
+        duration: route.duration || 0,
+      });
+    }
+    
+    // Return transformed route data
+    return {
+      geometry: route.geometry, // Already in GeoJSON format
+      distance: route.distance, // Already in meters
+      duration: route.duration, // Already in seconds
+      steps,
+    };
+  } catch (error) {
+    // Re-throw with more context if it's not already an Error
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Failed to fetch route: ${String(error)}`);
+  }
 }
 
 /**
