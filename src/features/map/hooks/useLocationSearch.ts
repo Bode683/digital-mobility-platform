@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useMap, MapLocation } from '../contexts/MapContext';
-import { useForwardGeocode } from './useForwardGeocode';
 import { debounce } from 'lodash';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MapLocation, useMap } from '../contexts/MapContext';
+import { useForwardGeocode } from './useForwardGeocode';
 
 export interface SearchSuggestion {
   id: string;
