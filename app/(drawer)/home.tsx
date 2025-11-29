@@ -10,7 +10,7 @@ import {
 import { RoutePreviewCard, useRideBooking } from "@/features/ride-booking";
 import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { Alert, StyleSheet, View } from "react-native";
 import { useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Toast from "react-native-toast-message";
@@ -156,6 +156,24 @@ export default function HomeScreen() {
       return;
     }
 
+    // Validate that ride types are loaded
+    if (rideState.availableRideTypes.length === 0) {
+      Alert.alert(
+        "Error",
+        "Ride types are being loaded. Please wait a moment and try again."
+      );
+      return;
+    }
+
+    // Validate that payment methods are loaded
+    if (rideState.paymentMethods.length === 0) {
+      Alert.alert(
+        "Error",
+        "Payment methods are being loaded. Please wait a moment and try again."
+      );
+      return;
+    }
+
     // Navigate to ride confirmation screen
     router.push({
       pathname: "/(drawer)/ride-confirmation",
@@ -169,6 +187,8 @@ export default function HomeScreen() {
     mapState.dropoffLocation,
     rideState.routeData,
     rideState.priceEstimates,
+    rideState.availableRideTypes,
+    rideState.paymentMethods,
     router,
   ]);
 

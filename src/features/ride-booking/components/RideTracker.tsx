@@ -12,6 +12,7 @@ import {
 import { Button, Divider, useTheme } from "react-native-paper";
 import { useRideBooking } from "../contexts/RideBookingContext";
 import { RideCancellationModal } from "./RideCancellationModal";
+import { TIMING } from "../constants";
 
 type MaterialIconName = ComponentProps<typeof MaterialIcons>["name"];
 
@@ -46,7 +47,7 @@ export function RideTracker({ onCancel }: RideTrackerProps) {
     };
 
     updateTimer();
-    const interval = setInterval(updateTimer, 30000); // Update every 30 seconds
+    const interval = setInterval(updateTimer, TIMING.ETA_COUNTDOWN_UPDATE_INTERVAL_MS);
 
     return () => clearInterval(interval);
   }, [currentRide]);

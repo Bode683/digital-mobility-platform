@@ -53,6 +53,9 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@testing-library/jest-native": "^5.4.3",
+    "@testing-library/react-native": "^13.3.3",
+    "@types/jest": "^30.0.0",
     "@types/lodash": "^4.17.20",
     "@types/react": "~19.1.0",
     "babel-plugin-module-resolver": "^5.0.2",
@@ -62,6 +65,7 @@
     "eslint-import-resolver-typescript": "^4.4.4",
     "expo-dev-client": "^6.0.16",
     "expo-doctor": "^1.17.11",
+    "jest-expo": "^54.0.13",
     "typescript": "~5.9.2"
   },
   "private": true

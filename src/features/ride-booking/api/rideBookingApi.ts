@@ -8,6 +8,7 @@ import {
   RouteData
 } from '../types';
 import { mockPaymentMethods, mockRideTypes } from './mockData';
+import { TIMING, PRICING, MAP_CONFIG, LOCATION } from '../constants';
 
 /**
  * Fetches available ride types based on location
@@ -22,8 +23,8 @@ export async function fetchRideTypes(
 ): Promise<RideType[]> {
   // In a real app, this would make an API call
   // For now, we'll simulate a network request with a timeout
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
+  await new Promise(resolve => setTimeout(resolve, TIMING.ROUTE_CALCULATION_DELAY_MS));
+
   // Return mock data
   return mockRideTypes;
 }
@@ -49,7 +50,7 @@ export async function fetchRoute(
   const coordinates = `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}`;
   
   // Use driving-traffic profile for real-time traffic-aware routing
-  const profile = 'driving-traffic';
+  const profile = MAP_CONFIG.ROUTING_PROFILE;
   const url = `https://api.mapbox.com/directions/v5/mapbox/${profile}/${coordinates}?geometries=geojson&steps=true&access_token=${accessToken}`;
   
   try {
@@ -149,47 +150,47 @@ export async function fetchRoute(
 export async function fetchPaymentMethods(): Promise<PaymentMethod[]> {
   // In a real app, this would make an API call
   // For now, we'll simulate a network request with a timeout
-  await new Promise(resolve => setTimeout(resolve, 800));
-  
+  await new Promise(resolve => setTimeout(resolve, TIMING.PAYMENT_METHODS_FETCH_DELAY_MS));
+
   // Return mock data
   return mockPaymentMethods;
 }
 
 /**
  * Creates a ride request
- * 
+ *
  * @param request Ride request data
  * @returns Promise with created ride
  */
 export async function createRideRequest(request: RideRequest): Promise<Ride> {
   // In a real app, this would make an API call
   // For now, we'll simulate a network request with a timeout
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  
+  await new Promise(resolve => setTimeout(resolve, TIMING.RIDE_REQUEST_DELAY_MS));
+
   // Get the selected ride type and payment method
   const rideType = mockRideTypes.find(rt => rt.id === request.rideTypeId);
   const paymentMethod = mockPaymentMethods.find(pm => pm.id === request.paymentMethodId);
-  
+
   if (!rideType || !paymentMethod) {
     throw new Error('Invalid ride type or payment method');
   }
-  
-  // Mock route data
-  const routeData = await fetchRoute(request.pickup, request.destination);
-  
+
+  // Use provided route data or fetch if not available
+  const routeData = request.route || await fetchRoute(request.pickup, request.destination);
+
   // Calculate fare based on distance and duration
   const distanceKm = routeData.distance / 1000;
   const durationMin = routeData.duration / 60;
-  const baseFare = 2.5;
-  const distanceFare = distanceKm * 1.25;
-  const timeFare = durationMin * 0.35;
+  const baseFare = PRICING.BASE_FARE;
+  const distanceFare = distanceKm * PRICING.PER_KM_RATE;
+  const timeFare = durationMin * PRICING.PER_MINUTE_RATE;
   const subtotal = baseFare + distanceFare + timeFare;
-  const fare = Math.max(subtotal * rideType.priceMultiplier, 5.0);
-  
+  const fare = Math.max(subtotal * rideType.priceMultiplier, PRICING.MINIMUM_FARE);
+
   // Create a mock ride
   const now = new Date();
-  const estimatedArrival = new Date(now.getTime() + 5 * 60000); // 5 minutes from now
-  
+  const estimatedArrival = new Date(now.getTime() + TIMING.ESTIMATED_ARRIVAL_TIME_MS);
+
   return {
     id: `ride-${Date.now()}`,
     status: 'requested',
@@ -215,15 +216,15 @@ export async function createRideRequest(request: RideRequest): Promise<Ride> {
 export async function cancelRide(rideId: string, reason?: string): Promise<boolean> {
   // In a real app, this would make an API call
   // For now, we'll simulate a network request with a timeout
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
+  await new Promise(resolve => setTimeout(resolve, TIMING.RIDE_CANCELLATION_DELAY_MS));
+
   // Always succeed in mock implementation
   return true;
 }
 
 /**
  * Fetches ride history
- * 
+ *
  * @param limit Maximum number of rides to fetch
  * @param offset Offset for pagination
  * @returns Promise with ride history
@@ -231,8 +232,8 @@ export async function cancelRide(rideId: string, reason?: string): Promise<boole
 export async function fetchRideHistory(limit = 10, offset = 0): Promise<Ride[]> {
   // In a real app, this would make an API call
   // For now, we'll simulate a network request with a timeout
-  await new Promise(resolve => setTimeout(resolve, 1200));
-  
+  await new Promise(resolve => setTimeout(resolve, TIMING.RIDE_HISTORY_FETCH_DELAY_MS));
+
   // Return empty array for now
   // In a real app, this would return actual ride history from the API
   return [];
@@ -240,13 +241,13 @@ export async function fetchRideHistory(limit = 10, offset = 0): Promise<Ride[]> 
 
 /**
  * Fetches cancellation reasons
- * 
+ *
  * @returns Promise with cancellation reasons
  */
 export async function fetchCancellationReasons(): Promise<CancellationReason[]> {
   // In a real app, this would make an API call
   // For now, we'll simulate a network request with a timeout
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await new Promise(resolve => setTimeout(resolve, TIMING.CANCELLATION_REASONS_FETCH_DELAY_MS));
   
   // Return mock data
   return [
@@ -262,17 +263,17 @@ export async function fetchCancellationReasons(): Promise<CancellationReason[]> 
  * Helper function to calculate distance between two points
  */
 function calculateDistance(loc1: MapLocation, loc2: MapLocation): number {
-  const R = 6371; // Earth's radius in km
+  const R = LOCATION.EARTH_RADIUS_KM;
   const dLat = toRad(loc2.latitude - loc1.latitude);
   const dLon = toRad(loc2.longitude - loc1.longitude);
-  
+
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRad(loc1.latitude)) *
       Math.cos(toRad(loc2.latitude)) *
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
-  
+
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }

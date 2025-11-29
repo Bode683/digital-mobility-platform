@@ -9,33 +9,48 @@ import { RideTracker } from "../components/RideTracker";
 import { useRideBooking } from "../contexts/RideBookingContext";
 import { useDriverLocation } from "../hooks/useDriverLocation";
 import type { Ride, RideStatus } from "../types";
+import { TIMING, LOCATION } from "../constants";
 
 export default function RideTrackingScreen() {
   const theme = useTheme();
   const navigation = useNavigation();
   const { state: rideState, dispatch } = useRideBooking();
   const completedRideIdRef = useRef<string | null>(null);
+  const currentRideRef = useRef<Ride | null>(null);
+
+  // Keep ref updated with current ride to avoid stale closures
+  useEffect(() => {
+    currentRideRef.current = rideState.currentRide;
+  }, [rideState.currentRide]);
 
   // Handle status changes from driver location hook
   const handleStatusChange = useCallback((newStatus: RideStatus) => {
-    if (!rideState.currentRide) return;
+    const currentRide = currentRideRef.current;
+    console.log('[RideTrackingScreen] handleStatusChange called:', {
+      newStatus,
+      currentStatus: currentRide?.status,
+      rideId: currentRide?.id
+    });
+
+    if (!currentRide) {
+      console.warn('[RideTrackingScreen] No current ride to update');
+      return;
+    }
 
     const updatedRide: Ride = {
-      ...rideState.currentRide,
+      ...currentRide,
       status: newStatus,
       updatedAt: new Date().toISOString(),
     };
 
+    console.log('[RideTrackingScreen] Dispatching ride update:', updatedRide.status);
     dispatch({ type: "SET_CURRENT_RIDE", payload: updatedRide });
-  }, [rideState.currentRide, dispatch]);
+  }, [dispatch]);
 
-  // Use the driver location hook
+  // Use the driver location hook (constants provide default values, but can be overridden)
   const { location: driverLocation } = useDriverLocation(
     rideState.currentRide,
     {
-      speedKmh: 30,
-      updateIntervalMs: 2000,
-      arrivalThresholdKm: 0.05,
       onStatusChange: handleStatusChange,
     }
   );
@@ -61,7 +76,7 @@ export default function RideTrackingScreen() {
       const completionTimeout = setTimeout(() => {
         dispatch({ type: "SET_CURRENT_RIDE", payload: null });
         // Navigation will happen automatically via the useEffect that watches currentRide
-      }, 2000); // 2 second delay to show "Ride completed" message
+      }, TIMING.COMPLETION_NAVIGATION_DELAY_MS);
 
       return () => clearTimeout(completionTimeout);
     }

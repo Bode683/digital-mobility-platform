@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Ride } from '../types';
 import { calculateDistance, isNearTarget, moveTowardTarget, type Coordinate } from '../utils/distanceCalculator';
 import { getNextStatus, validateTransition, type RideStatus } from '../utils/rideStateMachine';
+import { TIMING, LOCATION } from '../constants';
 
 interface DriverLocationState {
   location: Coordinate | null;
@@ -36,9 +37,9 @@ export function useDriverLocation(
   options: UseDriverLocationOptions = {}
 ) {
   const {
-    speedKmh = 30, // Default: 30 km/h
-    updateIntervalMs = 2000, // Default: update every 2 seconds
-    arrivalThresholdKm = 0.05, // Default: 50 meters
+    speedKmh = LOCATION.DEFAULT_DRIVER_SPEED_KMH,
+    updateIntervalMs = TIMING.DRIVER_LOCATION_UPDATE_INTERVAL_MS,
+    arrivalThresholdKm = LOCATION.ARRIVAL_THRESHOLD_KM,
     onStatusChange,
   } = options;
 
@@ -53,6 +54,13 @@ export function useDriverLocation(
   const hasArrivedAtPickupRef = useRef(false);
   const hasArrivedAtDestinationRef = useRef(false);
   const previousRideIdRef = useRef<string | null>(null);
+  const tripStartTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentRideRef = useRef<Ride | null>(null);
+
+  // Keep ref updated with current ride
+  useEffect(() => {
+    currentRideRef.current = ride;
+  }, [ride]);
 
   // Determine target location based on ride status
   const getTargetLocation = useCallback(
@@ -84,6 +92,12 @@ export function useDriverLocation(
       hasArrivedAtPickupRef.current = false;
       hasArrivedAtDestinationRef.current = false;
       previousRideIdRef.current = null;
+
+      // Clear any pending timeouts
+      if (tripStartTimeoutRef.current) {
+        clearTimeout(tripStartTimeoutRef.current);
+        tripStartTimeoutRef.current = null;
+      }
       return;
     }
 
@@ -93,10 +107,16 @@ export function useDriverLocation(
       hasArrivedAtPickupRef.current = false;
       hasArrivedAtDestinationRef.current = false;
 
+      // Clear any pending timeouts from previous ride
+      if (tripStartTimeoutRef.current) {
+        clearTimeout(tripStartTimeoutRef.current);
+        tripStartTimeoutRef.current = null;
+      }
+
       // Initialize driver location near pickup (slightly offset)
       const initialLocation: Coordinate = {
-        latitude: ride.pickup.latitude - 0.01,
-        longitude: ride.pickup.longitude - 0.01,
+        latitude: ride.pickup.latitude - LOCATION.INITIAL_DRIVER_OFFSET_DEGREES,
+        longitude: ride.pickup.longitude - LOCATION.INITIAL_DRIVER_OFFSET_DEGREES,
       };
 
       const target = getTargetLocation(ride);
@@ -113,7 +133,7 @@ export function useDriverLocation(
 
   // Update driver location at regular intervals
   useEffect(() => {
-    if (!ride || !state.location) return;
+    if (!ride) return;
 
     const target = getTargetLocation(ride);
     if (!target) {
@@ -122,13 +142,16 @@ export function useDriverLocation(
     }
 
     // Update target if it changed
-    if (
-      !state.targetLocation ||
-      state.targetLocation.latitude !== target.latitude ||
-      state.targetLocation.longitude !== target.longitude
-    ) {
-      setState(prev => ({ ...prev, targetLocation: target }));
-    }
+    setState(prev => {
+      if (
+        !prev.targetLocation ||
+        prev.targetLocation.latitude !== target.latitude ||
+        prev.targetLocation.longitude !== target.longitude
+      ) {
+        return { ...prev, targetLocation: target };
+      }
+      return prev;
+    });
 
     const interval = setInterval(() => {
       setState(prevState => {
@@ -167,7 +190,7 @@ export function useDriverLocation(
     }, updateIntervalMs);
 
     return () => clearInterval(interval);
-  }, [ride, state.location, state.targetLocation, getTargetLocation, speedKmh, updateIntervalMs, arrivalThresholdKm]);
+  }, [ride, ride?.status, getTargetLocation, speedKmh, updateIntervalMs, arrivalThresholdKm]);
 
   // Check for arrivals and trigger status transitions
   useEffect(() => {
@@ -180,19 +203,28 @@ export function useDriverLocation(
       isNearTarget(state.location, ride.pickup, arrivalThresholdKm)
     ) {
       hasArrivedAtPickupRef.current = true;
+      console.log('[useDriverLocation] Driver arrived at pickup, transitioning to arriving');
 
       // Transition to 'arriving'
       const newStatus = getNextStatus(ride.status, 'driver_arrived');
       if (validateTransition(ride.status, newStatus) && onStatusChange) {
         onStatusChange(newStatus);
 
-        // After 3 seconds, transition to 'in_progress' (trip started)
-        setTimeout(() => {
-          const nextStatus = getNextStatus('arriving', 'trip_started');
-          if (onStatusChange) {
-            onStatusChange(nextStatus);
+        // After delay, transition to 'in_progress' (trip started)
+        // Store timeout ref so it can be cleared if ride is cancelled
+        tripStartTimeoutRef.current = setTimeout(() => {
+          // Use ref to get current ride status (avoid stale closure)
+          const currentRide = currentRideRef.current;
+          console.log('[useDriverLocation] Trip start timeout fired, current status:', currentRide?.status);
+          if (currentRide && currentRide.status === 'arriving') {
+            const nextStatus = getNextStatus('arriving', 'trip_started');
+            if (validateTransition('arriving', nextStatus) && onStatusChange) {
+              console.log('[useDriverLocation] Transitioning to in_progress');
+              onStatusChange(nextStatus);
+            }
           }
-        }, 3000);
+          tripStartTimeoutRef.current = null;
+        }, TIMING.TRIP_START_DELAY_MS);
       }
     }
 
@@ -203,6 +235,7 @@ export function useDriverLocation(
       isNearTarget(state.location, ride.destination, arrivalThresholdKm)
     ) {
       hasArrivedAtDestinationRef.current = true;
+      console.log('[useDriverLocation] Driver arrived at destination, transitioning to completed');
 
       // Transition to 'completed'
       const newStatus = getNextStatus(ride.status, 'trip_ended');
