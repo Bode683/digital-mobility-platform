@@ -117,6 +117,7 @@ export interface RideRequest {
   destination: MapLocation;
   rideTypeId: string;
   paymentMethodId: string;
+  route?: RouteData; // Optional pre-calculated route data to avoid duplicate API calls
 }
 
 /**

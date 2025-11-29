@@ -1,7 +1,8 @@
-import { debounce } from 'lodash';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebounce } from 'use-debounce';
 import { MapLocation, useMap } from '../contexts/MapContext';
 import { useForwardGeocode } from './useForwardGeocode';
+import { usePrevious } from './usePrevious';
 
 export interface SearchSuggestion {
   id: string;
@@ -33,6 +34,10 @@ export function useLocationSearch({
   const [pickupQuery, setPickupQuery] = useState(initialPickup);
   const [dropoffQuery, setDropoffQuery] = useState(initialDropoff);
   
+  // Debounced query values (300ms delay)
+  const [debouncedPickupQuery] = useDebounce(pickupQuery.trim(), 300);
+  const [debouncedDropoffQuery] = useDebounce(dropoffQuery.trim(), 300);
+  
   // Suggestions state
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [activeInput, setActiveInput] = useState<'pickup' | 'dropoff' | null>(null);
@@ -43,193 +48,144 @@ export function useLocationSearch({
   const { forwardGeocodeMultiple, loading: geocodingLoading } = useForwardGeocode();
   
   // Memoize arrays to prevent unnecessary recreations
-  const favoriteLocationsRef = useRef(favoriteLocations);
-  const recentLocationsRef = useRef(recentLocations);
-  
-  // Update refs when props change
-  useEffect(() => {
-    favoriteLocationsRef.current = favoriteLocations;
-    recentLocationsRef.current = recentLocations;
-  }, [favoriteLocations, recentLocations]);
-  
-  // Memoize current location to prevent debouncedSearch recreation
-  const currentLocationRef = useRef(mapState.currentLocation);
-  useEffect(() => {
-    currentLocationRef.current = mapState.currentLocation;
-  }, [mapState.currentLocation]);
+  const stableFavorites = useMemo(() => favoriteLocations, [JSON.stringify(favoriteLocations)]);
+  const stableRecents = useMemo(() => recentLocations, [JSON.stringify(recentLocations)]);
   
   // Update search status
   useEffect(() => {
     setIsSearching(geocodingLoading);
   }, [geocodingLoading]);
 
-  // Search for locations based on query
-  // Use refs in dependencies to prevent recreation on every render
-  const debouncedSearch = useMemo(
-    () =>
-      debounce(async (query: string) => {
-        console.log('[useLocationSearch] debouncedSearch called with query:', query);
-        
-        if (!query.trim()) {
-          // Show recent and favorite locations when no query
-          console.log('[useLocationSearch] Empty query, showing recent/favorites');
-          const combinedSuggestions = [
-            ...favoriteLocationsRef.current.map((loc) => ({
-              ...loc,
-              type: "favorite" as const,
-            })),
-            ...recentLocationsRef.current.map((loc) => ({
-              ...loc,
-              type: "recent" as const,
-            })),
-          ];
-          console.log('[useLocationSearch] Combined suggestions count:', combinedSuggestions.length);
-          setSuggestions(combinedSuggestions);
-          return;
-        }
-
-        try {
-          console.log('[useLocationSearch] Starting geocode for:', query);
-          setIsSearching(true);
-          
-          // Use proximity if we have current location (from ref to avoid dependency)
-          const currentLocation = currentLocationRef.current;
-          const proximity = currentLocation 
-            ? [currentLocation.longitude, currentLocation.latitude] as [number, number]
-            : undefined;
-          
-          const locations = await forwardGeocodeMultiple(query, {
-            limit: 5,
-            autocomplete: true,
-            types: ['address', 'poi'],
-            proximity,
-          });
-          
-          console.log('[useLocationSearch] Geocode results count:', locations.length);
-
-          if (locations.length === 0) {
-            console.log('[useLocationSearch] No locations returned, clearing suggestions');
-            setSuggestions([]);
-            return;
-          }
-
-          // Convert all locations to suggestions
-          const newSuggestions: SearchSuggestion[] = locations.map((location, index) => ({
-            id: location.placeId || `search-${Date.now()}-${index}`,
-            title: location.name || query,
-            subtitle: location.address || "",
-            icon: "location-on",
-            type: "search" as const,
-            location: {
-              latitude: location.latitude,
-              longitude: location.longitude,
-              address: location.address,
-              name: location.name,
-            },
-          }));
-
-          console.log('[useLocationSearch] Created suggestions:', newSuggestions.length);
-          setSuggestions(newSuggestions);
-        } catch (error) {
-          console.error("[useLocationSearch] Error searching locations:", error);
-          setSuggestions([]);
-        } finally {
-          setIsSearching(false);
-        }
-      }, 300),
-    [forwardGeocodeMultiple] // Only depend on forwardGeocodeMultiple which should be stable
-  );
-
-  const searchLocations = useCallback(
-    (query: string) => {
-      debouncedSearch(query);
-    },
-    [debouncedSearch]
-  );
-
-  // Track previous trimmed query values to prevent unnecessary updates
-  const prevPickupQueryTrimmedRef = useRef(pickupQuery.trim());
-  const prevDropoffQueryTrimmedRef = useRef(dropoffQuery.trim());
-  const prevActiveInputRef = useRef(activeInput);
-  
   // Helper function to get combined recent/favorites suggestions
-  const getRecentFavoritesSuggestions = useCallback(() => {
+  const getRecentFavoritesSuggestions = useCallback((): SearchSuggestion[] => {
     return [
-      ...favoriteLocationsRef.current.map((loc) => ({
+      ...stableFavorites.map((loc) => ({
         ...loc,
         type: "favorite" as const,
       })),
-      ...recentLocationsRef.current.map((loc) => ({
+      ...stableRecents.map((loc) => ({
         ...loc,
         type: "recent" as const,
       })),
     ];
-  }, []); // No dependencies needed since we use refs
+  }, [stableFavorites, stableRecents]);
+
+  // Search for locations based on query
+  const searchLocations = useCallback(
+    async (query: string) => {
+      console.log('[useLocationSearch] searchLocations called with query:', query);
+      
+      if (!query) {
+        // Show recent and favorite locations when no query
+        console.log('[useLocationSearch] Empty query, showing recent/favorites');
+        const combinedSuggestions = getRecentFavoritesSuggestions();
+        console.log('[useLocationSearch] Combined suggestions count:', combinedSuggestions.length);
+        setSuggestions(combinedSuggestions);
+        return;
+      }
+
+      try {
+        console.log('[useLocationSearch] Starting geocode for:', query);
+        setIsSearching(true);
+        
+        // Use proximity if we have current location
+        const proximity = mapState.currentLocation 
+          ? [mapState.currentLocation.longitude, mapState.currentLocation.latitude] as [number, number]
+          : undefined;
+        
+        const locations = await forwardGeocodeMultiple(query, {
+          limit: 5,
+          autocomplete: true,
+          types: ['address', 'poi'],
+          proximity,
+        });
+        
+        console.log('[useLocationSearch] Geocode results count:', locations.length);
+
+        if (locations.length === 0) {
+          console.log('[useLocationSearch] No locations returned, clearing suggestions');
+          setSuggestions([]);
+          return;
+        }
+
+        // Convert all locations to suggestions
+        const newSuggestions: SearchSuggestion[] = locations.map((location, index) => ({
+          id: location.placeId || `search-${Date.now()}-${index}`,
+          title: location.name || query,
+          subtitle: location.address || "",
+          icon: "location-on",
+          type: "search" as const,
+          location: {
+            latitude: location.latitude,
+            longitude: location.longitude,
+            address: location.address,
+            name: location.name,
+          },
+        }));
+
+        console.log('[useLocationSearch] Created suggestions:', newSuggestions.length);
+        setSuggestions(newSuggestions);
+      } catch (error) {
+        console.error("[useLocationSearch] Error searching locations:", error);
+        setSuggestions([]);
+      } finally {
+        setIsSearching(false);
+      }
+    },
+    [forwardGeocodeMultiple, mapState.currentLocation, getRecentFavoritesSuggestions]
+  );
+
+  // Track previous values to detect changes
+  const prevActiveInput = usePrevious(activeInput);
   
-  // Update suggestions when query changes
+  // Update suggestions when query or active input changes
   useEffect(() => {
-    const pickupQueryTrimmed = pickupQuery.trim();
-    const dropoffQueryTrimmed = dropoffQuery.trim();
-    
-    // Skip if nothing changed (compare trimmed values)
-    const pickupQueryChanged = prevPickupQueryTrimmedRef.current !== pickupQueryTrimmed;
-    const dropoffQueryChanged = prevDropoffQueryTrimmedRef.current !== dropoffQueryTrimmed;
-    const activeInputChanged = prevActiveInputRef.current !== activeInput;
-    
-    if (!pickupQueryChanged && !dropoffQueryChanged && !activeInputChanged) {
-      return; // No changes, skip execution
-    }
-    
-    // Update refs
-    prevPickupQueryTrimmedRef.current = pickupQueryTrimmed;
-    prevDropoffQueryTrimmedRef.current = dropoffQueryTrimmed;
-    prevActiveInputRef.current = activeInput;
-    
     console.log('[useLocationSearch] Search effect triggered:', {
       activeInput,
-      pickupQuery,
-      dropoffQuery,
-      pickupQueryChanged,
-      dropoffQueryChanged,
-      activeInputChanged,
+      debouncedPickupQuery,
+      debouncedDropoffQuery,
     });
     
-    if (activeInput === 'pickup') {
-      if (pickupQueryTrimmed) {
-        // Only search if query is not empty and actually changed
-        if (pickupQueryChanged) {
-          console.log('[useLocationSearch] Searching pickup query:', pickupQueryTrimmed);
-          searchLocations(pickupQueryTrimmed);
-        }
-      } else {
-        // Show recent/favorites for empty query when input is focused
-        if (activeInputChanged || pickupQueryChanged) {
-          console.log('[useLocationSearch] Empty pickup query, showing recent/favorites');
-          setSuggestions(getRecentFavoritesSuggestions());
-        }
-      }
-    } else if (activeInput === 'dropoff') {
-      if (dropoffQueryTrimmed) {
-        // Only search if query is not empty and actually changed
-        if (dropoffQueryChanged) {
-          console.log('[useLocationSearch] Searching dropoff query:', dropoffQueryTrimmed);
-          searchLocations(dropoffQueryTrimmed);
-        }
-      } else {
-        // Show recent/favorites for empty query when input is focused
-        if (activeInputChanged || dropoffQueryChanged) {
-          console.log('[useLocationSearch] Empty dropoff query, showing recent/favorites');
-          setSuggestions(getRecentFavoritesSuggestions());
-        }
-      }
-    } else {
-      // Clear suggestions when no active input
-      if (activeInputChanged) {
+    // Handle input focus/blur changes
+    if (activeInput !== prevActiveInput) {
+      if (!activeInput) {
+        // Clear suggestions when input is blurred
         console.log('[useLocationSearch] No active input, clearing suggestions');
         setSuggestions([]);
+        return;
       }
     }
-  }, [pickupQuery, dropoffQuery, activeInput, searchLocations, getRecentFavoritesSuggestions]);
+    
+    // Handle pickup search
+    if (activeInput === 'pickup') {
+      if (debouncedPickupQuery) {
+        console.log('[useLocationSearch] Searching pickup query:', debouncedPickupQuery);
+        searchLocations(debouncedPickupQuery);
+      } else {
+        // Show recent/favorites for empty query
+        console.log('[useLocationSearch] Empty pickup query, showing recent/favorites');
+        setSuggestions(getRecentFavoritesSuggestions());
+      }
+    } 
+    // Handle dropoff search
+    else if (activeInput === 'dropoff') {
+      if (debouncedDropoffQuery) {
+        console.log('[useLocationSearch] Searching dropoff query:', debouncedDropoffQuery);
+        searchLocations(debouncedDropoffQuery);
+      } else {
+        // Show recent/favorites for empty query
+        console.log('[useLocationSearch] Empty dropoff query, showing recent/favorites');
+        setSuggestions(getRecentFavoritesSuggestions());
+      }
+    }
+  }, [
+    activeInput,
+    prevActiveInput,
+    debouncedPickupQuery,
+    debouncedDropoffQuery,
+    searchLocations,
+    getRecentFavoritesSuggestions
+  ]);
 
   // Handle suggestion selection
   const handleSuggestionSelect = useCallback(

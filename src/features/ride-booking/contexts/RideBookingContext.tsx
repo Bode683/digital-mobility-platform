@@ -21,6 +21,8 @@ import {
   RouteData,
 } from "../types";
 import { calculatePrice } from "../utils/priceCalculation";
+import { validateTransition } from "../utils/rideStateMachine";
+import { PRICING, TIMING, LOCATION } from "../constants";
 
 // Define action types
 type RideBookingAction =
@@ -49,11 +51,11 @@ type RideBookingAction =
 
 // Initial state
 const initialPriceFactors: PriceFactors = {
-  basePrice: 2.5,
-  perKmRate: 1.25,
-  perMinuteRate: 0.35,
-  minimumFare: 5.0,
-  surgePricing: 1.0, // No surge by default
+  basePrice: PRICING.BASE_FARE,
+  perKmRate: PRICING.PER_KM_RATE,
+  perMinuteRate: PRICING.PER_MINUTE_RATE,
+  minimumFare: PRICING.MINIMUM_FARE,
+  surgePricing: PRICING.DEFAULT_SURGE_MULTIPLIER,
 };
 
 const initialState: RideBookingState = {
@@ -104,6 +106,27 @@ function rideBookingReducer(
     case "SELECT_PAYMENT_METHOD":
       return { ...state, selectedPaymentMethod: action.payload };
     case "SET_CURRENT_RIDE":
+      console.log('[RideBookingContext] SET_CURRENT_RIDE received:', {
+        currentStatus: state.currentRide?.status,
+        newStatus: action.payload?.status,
+        rideId: action.payload?.id
+      });
+
+      // Validate status transition
+      if (state.currentRide && action.payload) {
+        const isValid = validateTransition(
+          state.currentRide.status,
+          action.payload.status
+        );
+        if (!isValid) {
+          console.warn(
+            `[RideBookingContext] Invalid status transition: ${state.currentRide.status} -> ${action.payload.status}`
+          );
+          return state;
+        }
+      }
+
+      console.log('[RideBookingContext] Status update applied:', action.payload?.status);
       return { ...state, currentRide: action.payload };
     case "ADD_TO_RIDE_HISTORY":
       return {
@@ -135,7 +158,12 @@ interface RideBookingContextType {
   dispatch: React.Dispatch<RideBookingAction>;
   setPickupLocation: (location: MapLocation | null) => void;
   setDestinationLocation: (location: MapLocation | null) => void;
-  calculateRoute: () => Promise<void>;
+  calculateRoute: (
+    pickupLocation: MapLocation,
+    destinationLocation: MapLocation,
+    selectedRideType: RideType | null,
+    availableRideTypes: RideType[]
+  ) => Promise<void>;
   selectRideType: (rideType: RideType | null) => void;
   selectPaymentMethod: (paymentMethod: PaymentMethod | null) => void;
   requestRide: () => Promise<Ride | null>;
@@ -155,12 +183,6 @@ interface RideBookingProviderProps {
 export function RideBookingProvider({ children }: RideBookingProviderProps) {
   const [state, dispatch] = useReducer(rideBookingReducer, initialState);
   const { state: mapState } = useMap();
-  
-  // Use ref to store latest state to avoid stale closures
-  const stateRef = useRef(state);
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
 
   // Load initial data
   useEffect(() => {
@@ -219,20 +241,25 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     }
   }, [mapState.pickupLocation, mapState.dropoffLocation, state.pickupLocation, state.destinationLocation]);
 
-  const calculatePriceEstimates = useCallback(() => {
-    if (!state.routeDistance || !state.routeDuration) return;
+  const calculatePriceEstimates = useCallback((
+    routeDistance: number,
+    routeDuration: number,
+    availableRideTypes: RideType[],
+    priceFactors: PriceFactors
+  ) => {
+    if (!routeDistance || !routeDuration) return;
 
     dispatch({ type: "SET_LOADING_PRICES", payload: true });
 
     try {
       const estimates: Record<string, number> = {};
 
-      state.availableRideTypes.forEach((rideType) => {
+      availableRideTypes.forEach((rideType) => {
         const price = calculatePrice(
-          state.routeDistance!,
-          state.routeDuration!,
+          routeDistance,
+          routeDuration,
           rideType,
-          state.priceFactors
+          priceFactors
         );
 
         estimates[rideType.id] = price;
@@ -244,7 +271,7 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     } finally {
       dispatch({ type: "SET_LOADING_PRICES", payload: false });
     }
-  }, [state.routeDistance, state.routeDuration, state.availableRideTypes, state.priceFactors]);
+  }, []);
 
   // Calculate price estimates when route or ride types change
   useEffect(() => {
@@ -253,9 +280,14 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
       state.routeDuration &&
       state.availableRideTypes.length > 0
     ) {
-      calculatePriceEstimates();
+      calculatePriceEstimates(
+        state.routeDistance,
+        state.routeDuration,
+        state.availableRideTypes,
+        state.priceFactors
+      );
     }
-  }, [state.routeDistance, state.routeDuration, state.availableRideTypes, calculatePriceEstimates]);
+  }, [state.routeDistance, state.routeDuration, state.availableRideTypes, state.priceFactors, calculatePriceEstimates]);
 
   // Helper functions
   const setPickupLocation = (location: MapLocation | null) => {
@@ -268,7 +300,7 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
 
   // Helper function to calculate distance between two points
   const calculateDistance = useCallback((loc1: MapLocation, loc2: MapLocation): number => {
-    const R = 6371; // Earth's radius in km
+    const R = LOCATION.EARTH_RADIUS_KM;
     const dLat = toRad(loc2.latitude - loc1.latitude);
     const dLon = toRad(loc2.longitude - loc1.longitude);
 
@@ -305,10 +337,12 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     []
   );
 
-  const calculateRoute = useCallback(async () => {
-    // Read from latest state to avoid stale closure
-    const { pickupLocation, destinationLocation } = stateRef.current;
-
+  const calculateRoute = useCallback(async (
+    pickupLocation: MapLocation,
+    destinationLocation: MapLocation,
+    selectedRideType: RideType | null,
+    availableRideTypes: RideType[]
+  ) => {
     if (!pickupLocation || !destinationLocation) {
       dispatch({
         type: "SET_ERROR",
@@ -322,11 +356,11 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     try {
       // In a real app, this would call an API to get route data
       // For now, we'll simulate it with a timeout and mock data
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, TIMING.ROUTE_CALCULATION_DELAY_MS));
 
       // Calculate straight-line distance for demo
       const distance = calculateDistance(pickupLocation, destinationLocation);
-      const duration = distance * 2 * 60; // Rough estimate: 30 km/h average speed
+      const duration = (distance / PRICING.AVERAGE_SPEED_KMH) * 3600; // seconds
 
       // Mock route data
       const routeData: RouteData = {
@@ -363,12 +397,10 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
       });
 
       // Auto-select first ride type if none selected
-      // Read from latest state to avoid stale closure
-      const currentState = stateRef.current;
-      if (!currentState.selectedRideType && currentState.availableRideTypes.length > 0) {
+      if (!selectedRideType && availableRideTypes.length > 0) {
         dispatch({
           type: "SELECT_RIDE_TYPE",
-          payload: currentState.availableRideTypes[0],
+          payload: availableRideTypes[0],
         });
       }
     } catch (error) {
@@ -387,15 +419,15 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     dispatch({ type: "SELECT_PAYMENT_METHOD", payload: paymentMethod });
   };
 
-  const requestRide = async (): Promise<Ride | null> => {
-    // Read from latest state to avoid stale closure
-    const currentState = stateRef.current;
+  const requestRide = useCallback(async (): Promise<Ride | null> => {
     const {
       pickupLocation,
       destinationLocation,
       selectedRideType,
       selectedPaymentMethod,
-    } = currentState;
+      priceEstimates,
+      routeData,
+    } = state;
 
     if (!pickupLocation || !destinationLocation) {
       dispatch({
@@ -454,30 +486,34 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
 
       // Mock ride creation
       const now = new Date();
-      const estimatedArrival = new Date(now.getTime() + 5 * 60000); // 5 minutes from now
+      const estimatedArrival = new Date(now.getTime() + TIMING.ESTIMATED_ARRIVAL_TIME_MS);
 
-      // Read latest state again to get most recent price estimates
-      const latestState = stateRef.current;
-
-      // Create ride with "accepted" status since driver is assigned
-      const ride: Ride = {
+      // Create ride with "requested" status first
+      const requestedRide: Ride = {
         id: `ride-${Date.now()}`,
-        status: "accepted", // Start with "accepted" since driver is already assigned
+        status: "requested",
         pickup: pickupLocation,
         destination: destinationLocation,
-        fare: latestState.priceEstimates[selectedRideType.id] || 0,
+        fare: priceEstimates[selectedRideType.id] || 0,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
         estimatedArrival: estimatedArrival.toISOString(),
         rideType: selectedRideType,
         paymentMethod: selectedPaymentMethod,
-        route: latestState.routeData || undefined,
+        route: routeData || undefined,
+      };
+
+      // Immediately transition to "accepted" with driver assigned
+      const acceptedRide: Ride = {
+        ...requestedRide,
+        status: "accepted",
+        updatedAt: new Date().toISOString(),
         driver: driver,
         vehicle: driver.vehicle,
       };
 
-      dispatch({ type: "SET_CURRENT_RIDE", payload: ride });
-      return ride;
+      dispatch({ type: "SET_CURRENT_RIDE", payload: acceptedRide });
+      return acceptedRide;
     } catch (error) {
       console.error("Error requesting ride:", error);
       dispatch({ type: "SET_ERROR", payload: "Failed to request ride" });
@@ -485,7 +521,7 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     } finally {
       dispatch({ type: "SET_REQUESTING_RIDE", payload: false });
     }
-  };
+  }, [state, convertDriverToRideBookingFormat]);
 
   const cancelRide = async (
     rideId: string,
@@ -499,7 +535,7 @@ export function RideBookingProvider({ children }: RideBookingProviderProps) {
     try {
       // In a real app, this would call an API to cancel the ride
       // For now, we'll simulate it with a timeout
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, TIMING.RIDE_CANCELLATION_DELAY_MS));
 
       const cancelledRide: Ride = {
         ...state.currentRide,
